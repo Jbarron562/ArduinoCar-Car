@@ -1,0 +1,233 @@
+//***********************************************************************************************************************
+// Programmer Name:           Jose Barron
+// Functions Involved:        setup, loop, makeWebServer, motorFunction, displayIPAddress
+
+
+
+// Description of Program      This program is designed to control 2 different DC motors of a car using the Arduino Uno Circuit board,
+//                             the CC3000 Adafruit breakout board, the v2.3 Adafruit motor shield, and the internet explorer web browser.
+//                             The program works by the void function reading a value from the IE web browser and then passing it to the motor
+//                             function, the motor function then seeks the value for the direction of the motor and then the motor begins to move.
+//                             Following the command the motor only moves for 1000 ms (1 second) and then it is told to stop.
+
+// Date:                      February 28th, 2016
+//************************************************************************************************************************
+
+
+
+// Include required libraries
+#include <Adafruit_CC3000.h>
+#include <Adafruit_MotorShield.h>
+
+// WiFi network (change with your settings !)
+#define WLAN_SSID    "the name of your router"                                       // The name of the internet connection, cannot be longer than 32 characters
+#define WLAN_PASS     "your password"
+#define WLAN_SECURITY   WLAN_SEC_WPA2                                 // This can be WLAN_SEC_UNSEC, WLAN_SEC_WEP, WLAN_SEC_WPA or WLAN_SEC_WPA2
+#define LISTEN_PORT           80                                      // The default value on most servers is 80, so I chose to keep it that way
+
+#define ADAFRUIT_CC3000_IRQ   3  // MUST be an interrupt pin!
+// These can be any two pins
+#define ADAFRUIT_CC3000_VBAT  5
+#define ADAFRUIT_CC3000_CS    10
+// Use hardware SPI for the remaining pins
+// On an UNO, SCK = 13, MISO = 12, and MOSI = 11
+Adafruit_CC3000 cc3000 = Adafruit_CC3000(ADAFRUIT_CC3000_CS, ADAFRUIT_CC3000_IRQ, ADAFRUIT_CC3000_VBAT,
+                                         SPI_CLOCK_DIVIDER); // you can change this clock speed
+
+// Create server
+Adafruit_CC3000_Server motorServer(LISTEN_PORT);
+
+String         getRequest  = "";                                     //Initializes getRequest
+boolean        reading      = false;                                  //becomes true when getRequest is active
+
+//***********************************************************************************************************************
+// Function Name:           setup
+// Function Parameters:     none
+// Return Values:           none
+// Calls to functions:      displayIPAddress
+// Brief Description:       This function is the initial set up for the program, it only runs once in the life of a program
+//                          It is mainly used in order to connect to the Adafruit CC3000 wifi breakout board
+//************************************************************************************************************************
+void setup() {
+
+  Serial.begin(115200);                                               // connection bauds
+
+  Serial.println(F("Loading..."));                                    // loading message for user peace of mind
+  if (!cc3000.begin())                                                // if no communication occurs
+  {
+    Serial.println(F("No communication with the CC3000"));            // an error message is given to the user
+    while (1);
+  }
+
+  if (!cc3000.connectToAP(WLAN_SSID, WLAN_PASS, WLAN_SECURITY)) {     // if can't log in, sent an error message
+    Serial.println(F("Please check your network information and try again!"));
+    while (1);
+  }
+
+  Serial.println(F("Connected!"));
+  while (! displayIPAddress()) {                                       // displays IP address or error message
+    delay(1000);
+  }
+
+  motorServer.begin();                                                   //begin listening for connections
+  Serial.println(F("Listening for connections..."));
+
+}
+
+//***********************************************************************************************************************
+// Function Name:           loop()
+// Function Parameters:     none
+// Return Values:           none
+// Calls to functions:      motorFunction, makeWebServer
+// Brief Description:       This function is a continous loop that runs as long as the Arduino is receiving power.  This function
+//                          calls motorFunction and gives it the ?motor=0 or ?motor=1 string in order for the motor functionn to use
+//                          it for its purposes, this function also calls the makeWebServer function in order to create a web server
+//                          inside of the Arduino
+//************************************************************************************************************************
+void loop() {                                                                                                                                    
+    Adafruit_CC3000_ClientRef client = motorServer.available();                           // connect with client
+     boolean sentRequest    = false;                                                 // is false creates the webserver, if true doesn't  
+  
+  if (client) {                                                                       // if client connect                                           
+    while (client.available()) {                                                      // Check if there is data available to read.
+      char c = client.read();
+
+      if (c == '?') {
+        reading = true;                                                               //If on the web bar a ? is found reading is set to true
+      }
+
+      if (reading) {                                                                  // If the previous test passed getRequest is set to ?
+        getRequest += c;
+      }
+
+      if (reading && c == ' ')                                                        // reading stops as soon as a blank space is found on the web bar
+      { reading = false;
+      Serial.println(getRequest);
+        motorFunction(getRequest);                                                    // sends getRequest through the motorFunction to make the motors move  
+        getRequest = "";                                                              // resets the value of getRequest to blank  
+        break;
+      }
+
+    }
+    if (!sentRequest) {
+      makeWebServer(client);
+      sentRequest = true;
+    }
+    delay(5);                                                                           // give the web browser time to receive the data
+    client.close();                                                                           // close the connection:
+    Serial.println("client disconnected");
+  }
+}
+
+
+//***********************************************************************************************************************
+// Function Name:           makeWebServer
+// Function Parameters:     client - since im limited in space I didn't want to make a copy of the client instead I used a pointer for it
+// Return Values:           none
+// Calls to functions:      none
+// Brief Description:       This function creates a web server for the Arduino.  It is used as the user interface in order to make this device
+//                          more user friendly
+//************************************************************************************************************************
+void makeWebServer(Adafruit_CC3000_ClientRef &client)
+{
+
+  // header information for the server page
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: text/html");
+  client.println();
+  client.print("<html> <head> <title> WiFi Bot </title> <body>");                                   // gives the tab a title
+
+
+
+  client.println("<h1> Pick forward, or backward </h1>");                                     // displays the instructions
+
+  //Below is the button, the information found in value is important because it later decides which way the motor will spin
+  // in the future I might add left and right so I'll probably give it values 3 and 4.
+  client.print("<form action='/' method='GET'><p><input type='hidden' name='motor'");
+  client.println(" value='0'><input type='submit' value='forward'/></form>");
+  
+  client.print("<form action='/' method='GET'><p><input type='hidden' name='motor'");
+  client.print(" value='1'><input type='submit' value='backward'/></form>");
+
+// tail end of the web page construction
+  client.print("</body>");
+  client.print("</html>");
+}
+
+
+//***********************************************************************************************************************
+// Function Name:           motorFunction
+// Function Parameters:     str
+// Return Values:           none
+// Calls to functions:      none
+// Brief Description:       This function takes a string value from the void function and looks 6 slots from the right of the
+//                          m of motor. If the character is equal to or less than 0 it tells the motor to move forward
+//                          if it is anything else it tells it to move backwards
+//************************************************************************************************************************
+void motorFunction(String &str) {
+  int   motor_index  = str.indexOf("motor");
+  int   motor_val    = str[motor_index + 6]  - '0';             // on the web address bar, count 6 spaces to the right of the m from motor to find a value for motor_val
+  Serial.println(motor_val);                                    // this is just for me to troubleshoot using the serial port
+  Adafruit_MotorShield AFMS = Adafruit_MotorShield();
+
+  // In order for the following lines of code to work the motors must be set to M1 and M2
+  Adafruit_DCMotor *myMotor = AFMS.getMotor(1);                 // sets myMotor = M1
+  Adafruit_DCMotor *myMotor2 = AFMS.getMotor(2);                // sets myMotor2 = M2
+
+
+  // below is the motor code to begin----------------------------------------------------
+  AFMS.begin();                                                 // frequency is set to default at 1.6KHz
+
+    // the following block of code makes the motors spin forward at half speed, the speed can be set
+    // to anything between 0-255 and 150 seemed like a good number to me
+
+    
+  if (motor_val <= 0) {                                         // if the value is set to 0 or less the motors will spin forward
+   // Serial.println("Forward");                                      this line was for troubleshooting purposes
+    myMotor->setSpeed(150);
+    myMotor->run(FORWARD);
+    myMotor2->setSpeed(150);
+    myMotor2->run(FORWARD);
+    delay(1000);
+
+    // the following lines of code stop the motors
+    myMotor->run(RELEASE);
+    myMotor2->run(RELEASE);
+
+  } else {                                                      // otherwise the motors will spin backwards
+    //Serial.println("nothing");                                      // this line was for troubleshooting purposes
+    myMotor->setSpeed(150);
+    myMotor->run(BACKWARD);
+    myMotor2->setSpeed(150);
+    myMotor2->run(BACKWARD);
+    delay(1000);
+    myMotor->run(RELEASE);
+    myMotor2->run(RELEASE);
+  }
+
+}
+//***********************************************************************************************************************
+// Function Name:           displayIPAddress
+// Function Parameters:     none
+// Return Values:           none
+// Calls to functions:      none
+// Brief Description:       This function displays the IP address for the Arduino device, the address is used to connect 
+//                          to the Device
+//************************************************************************************************************************
+bool displayIPAddress(void)
+{
+  uint32_t ipAddress, netmask, gateway, dhcpserv, dnsserv;
+
+  if (!cc3000.getIPAddress(&ipAddress, &netmask, &gateway, &dhcpserv, &dnsserv))
+  {
+    Serial.println(F("No IP Address was found! \n"));
+    return false;
+  }
+  else
+  {
+    Serial.print(F("\n The device IP address is: "));
+    cc3000.printIPdotsRev(ipAddress);
+    Serial.println();
+    return true;
+  }
+}
